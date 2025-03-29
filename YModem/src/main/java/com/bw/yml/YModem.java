@@ -43,12 +43,14 @@ import java.io.IOException;
 
 public class YModem implements FileStreamThread.DataRaderListener {
 
-    private static final int STEP_HELLO = 0x00;
+    private static final int STEP_INIT = 0x00;
     private static final int STEP_FILE_NAME = 0x01;
-    private static final int STEP_FILE_BODY = 0x02;
-    private static final int STEP_EOT = 0x03;
-    private static final int STEP_END = 0x04;
-    private static int CURR_STEP = STEP_HELLO;
+    private static final int STEP_FILE_NAME_ACK = 0x02;
+    private static final int STEP_FILE_BODY = 0x03;
+    private static final int STEP_EOT = 0x04;
+    private static final int STEP_END = 0x05;
+    private static final int STEP_COMPLETE = 0x06;
+    private static int CURR_STEP = STEP_INIT;
 
     private static final byte ACK = 0x06; /* ACKnowlege */
     private static final byte NAK = 0x15; /* Negative AcKnowlege */
@@ -118,6 +120,10 @@ public class YModem implements FileStreamThread.DataRaderListener {
         }
         timerHelper.stopTimer();
         timerHelper.unRegisterListener();
+        if (getCurrStep() != STEP_COMPLETE && listener != null) {
+            listener.onFailed("Stopped.");
+        }
+        CURR_STEP = STEP_INIT;
     }
 
     /**
@@ -130,10 +136,11 @@ public class YModem implements FileStreamThread.DataRaderListener {
         if (respData != null && respData.length > 0) {
             Lg.f("YModem received " + respData.length + " bytes.");
             switch (CURR_STEP) {
-                case STEP_HELLO:
+                case STEP_INIT:
                     handleData(respData);
                     break;
                 case STEP_FILE_NAME:
+                case STEP_FILE_NAME_ACK:
                     handleFileName(respData);
                     break;
                 case STEP_FILE_BODY:
@@ -166,7 +173,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
     private void sendData(String data) {
         streamThread = new FileStreamThread(mContext, filePath, this);
         if(data != null) {
-            CURR_STEP = STEP_HELLO;
+            CURR_STEP = STEP_INIT;
             Lg.f("StartData!!!");
             byte[] hello = YModemUtil.getYModelData(data);
             sendPackageData(hello);
@@ -228,9 +235,16 @@ public class YModem implements FileStreamThread.DataRaderListener {
             // or trigger the timeout and resend the current package data
             //启动计时器，当收到回复时将被取消，
             //或触发超时并重新发送当前包数据
-            timerHelper.startTimer(timeoutListener, PACKAGE_TIME_OUT);
+            reClock();
             listener.onDataReady(packageData);
         }
+    }
+
+    /**
+     * 重新倒计时
+     */
+    private void reClock() {
+        timerHelper.startTimer(timeoutListener, PACKAGE_TIME_OUT);
     }
 
     /**
@@ -253,6 +267,15 @@ public class YModem implements FileStreamThread.DataRaderListener {
     private void handleFileName(byte[] value) {
         if (value.length == 2 && value[0] == ACK && value[1] == ST_C) {//Receive 'ACK C' for file name
             Lg.f("Received 'ACK C'");
+            packageErrorTimes = 0;
+            startSendFileData();
+        } else if (getCurrStep() == STEP_FILE_NAME && value.length == 1 && value[0] == ACK) {
+            Lg.f("Received 'ACK'");
+            CURR_STEP = STEP_FILE_NAME_ACK;
+            packageErrorTimes = 0;
+            reClock();
+        } else if (getCurrStep() == STEP_FILE_NAME_ACK && value[0] == ST_C) {
+            Lg.f("Received 'C'");
             packageErrorTimes = 0;
             startSendFileData();
         } else if (value[0] == ST_C) {//Receive 'C' for file name, this package should be resent
@@ -307,6 +330,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
             //发送已经成功，完全结束
             if (listener != null) {
                 listener.onSuccess();
+                CURR_STEP = STEP_COMPLETE;
             }
         } else if ((new String(character)).equals(MD5_OK)) {//The file data has been checked,Well Done!
             Lg.f("Received 'MD5_OK'");
@@ -414,6 +438,35 @@ public class YModem implements FileStreamThread.DataRaderListener {
             return new YModem(context, filePath, fileNameString, fileMd5String, size, listener);
         }
 
+    }
+
+    /**
+     * 获取当前步骤数
+     *
+     * @return 当前步骤数
+     */
+    public int getCurrStep() {
+        return CURR_STEP;
+    }
+
+    /**
+     * 查询当前是否在运行中
+     *
+     * @return 当前是否在运行中
+     */
+    public boolean isRunning() {
+        int currStep = getCurrStep();
+        return currStep > STEP_INIT && currStep < STEP_COMPLETE;
+    }
+
+    /**
+     * 查询当前是否已完成
+     *
+     * @return 当前是否已完成
+     */
+    public boolean isComplete() {
+        int currStep = getCurrStep();
+        return currStep == STEP_COMPLETE;
     }
 
 }
