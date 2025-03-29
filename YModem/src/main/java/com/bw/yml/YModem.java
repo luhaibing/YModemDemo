@@ -49,7 +49,8 @@ public class YModem implements FileStreamThread.DataRaderListener {
     private static final int STEP_FILE_BODY = 0x03;
     private static final int STEP_EOT = 0x04;
     private static final int STEP_END = 0x05;
-    private static final int STEP_COMPLETE = 0x06;
+    private static final int STEP_SUCCEED = 0x06;
+    private static final int STEP_FAILED = 0x07;
     private static int CURR_STEP = STEP_INIT;
 
     private static final byte ACK = 0x06; /* ACKnowlege */
@@ -119,20 +120,31 @@ public class YModem implements FileStreamThread.DataRaderListener {
     /**
      * Stop the transmission when you don't need it or shut it down in an accident
      * 停止传输当你不需要它或关闭它在一次事故
+     * 内部停止
      */
-    public void stop() {
+    private void internalShutdown() {
         bytesSent = 0;
         currSending = null;
         packageErrorTimes = 0;
         if (streamThread != null) {
             streamThread.release();
+            streamThread = null;
         }
         timerHelper.stopTimer();
         timerHelper.unRegisterListener();
-        if (getCurrStep() != STEP_COMPLETE && listener != null) {
-            listener.onFailed("Stopped.");
+    }
+
+    /**
+     * 外部停止
+     */
+    public void stop() {
+        internalShutdown();
+        if (getCurrStep() < STEP_SUCCEED) {
+            if (listener != null) {
+                listener.onFailed("Stopped.");
+            }
+            CURR_STEP = STEP_FAILED;
         }
-        CURR_STEP = STEP_INIT;
     }
 
     /**
@@ -142,9 +154,14 @@ public class YModem implements FileStreamThread.DataRaderListener {
     public void onReceiveData(byte[] respData) {
         //Stop the package timer
         timerHelper.stopTimer();
+        int currStep = getCurrStep();
+        if (currStep >= STEP_SUCCEED) {
+            Lg.f("YModem is Done.");
+            return;
+        }
         if (respData != null && respData.length > 0) {
             Lg.f("YModem received " + respData.length + " bytes.");
-            switch (CURR_STEP) {
+            switch (currStep) {
                 case STEP_INIT:
                     handleData(respData);
                     break;
@@ -339,24 +356,26 @@ public class YModem implements FileStreamThread.DataRaderListener {
     private void handleEnd(byte[] character) {
         if (character[0] == ACK) {//The last ACK represents that the transmission has been finished, but we should validate the file
             Lg.f("Received 'ACK'");
-            packageErrorTimes = 0;
             //发送已经成功，完全结束
+            internalShutdown();
             if (listener != null) {
                 listener.onSuccess();
-                CURR_STEP = STEP_COMPLETE;
             }
+            CURR_STEP = STEP_SUCCEED;
         } else if ((new String(character)).equals(MD5_OK)) {//The file data has been checked,Well Done!
             Lg.f("Received 'MD5_OK'");
-            stop();
+            internalShutdown();
             if (listener != null) {
                 listener.onSuccess();
             }
+            CURR_STEP = STEP_SUCCEED;
         } else if ((new String(character)).equals(MD5_ERR)) {//Oops...Transmission Failed...
             Lg.f("Received 'MD5_ERR'");
-            stop();
+            internalShutdown();
             if (listener != null) {
                 listener.onFailed("MD5 check failed!!!");
             }
+            CURR_STEP = STEP_FAILED;
         } else {
             handleOthers(character[0]);
         }
@@ -368,10 +387,11 @@ public class YModem implements FileStreamThread.DataRaderListener {
             handlePackageFail("Received NAK");
         } else if (character == CAN) {//Some big problem occurred, transmission failed...
             Lg.f("Received 'CAN'");
+            internalShutdown();
             if (listener != null) {
                 listener.onFailed("Received CAN");
             }
-            stop();
+            CURR_STEP = STEP_FAILED;
         }
     }
 
@@ -385,10 +405,11 @@ public class YModem implements FileStreamThread.DataRaderListener {
             sendPackageData(currSending);
         } else {
             //Still, we stop the transmission, release the resources
-            stop();
+            internalShutdown();
             if (listener != null) {
                 listener.onFailed(reason);
             }
+            CURR_STEP = STEP_FAILED;
         }
     }
 
@@ -469,17 +490,17 @@ public class YModem implements FileStreamThread.DataRaderListener {
      */
     public boolean isRunning() {
         int currStep = getCurrStep();
-        return currStep > STEP_INIT && currStep < STEP_COMPLETE;
+        return currStep > STEP_INIT && currStep < STEP_SUCCEED;
     }
 
     /**
-     * 查询当前是否已完成
+     * 查询当前是否已结束
      *
-     * @return 当前是否已完成
+     * @return 当前是否已结束
      */
     public boolean isComplete() {
         int currStep = getCurrStep();
-        return currStep == STEP_COMPLETE;
+        return currStep >= STEP_SUCCEED;
     }
 
 }
