@@ -74,10 +74,11 @@ public class YModem implements FileStreamThread.DataRaderListener {
     //package data of current sending, used for int case of fail
     private byte[] currSending = null;
     private int packageErrorTimes = 0;
-    private static final int MAX_PACKAGE_SEND_ERROR_TIMES = 6;
+    protected static Integer mSize = 1024;
+    private final int maxRetries;
     //the timeout interval for a single package
-    private static final int PACKAGE_TIME_OUT = 6000;
-    static Integer mSize = 1024;
+    private final int packageTimeOut;
+    private final long interval;
 
     /**
      * Construct of the YModemBLE,you may don't need the fileMD5 checking,remove it
@@ -88,8 +89,9 @@ public class YModem implements FileStreamThread.DataRaderListener {
      * @param fileMd5String  md5 for terminal checking after transmission finished 传输结束后的终端检查MD5
      */
     private YModem(Context context, String filePath,
-                  String fileNameString, String fileMd5String,Integer size,
-                  YModemListener listener) {
+                   String fileNameString, String fileMd5String, Integer size,
+                   int maxRetries, int interval, int packageTimeOut,
+                   YModemListener listener) {
         this.filePath = filePath;
         this.fileNameString = fileNameString;
         this.fileMd5String = fileMd5String;
@@ -99,6 +101,9 @@ public class YModem implements FileStreamThread.DataRaderListener {
         mSize = size;
         this.mContext = context;
         this.listener = listener;
+        this.interval = Math.max(Math.min(interval, 1000 * 10), 25);
+        this.maxRetries = Math.max(maxRetries, 6);
+        this.packageTimeOut = Math.max(packageTimeOut, 0);
     }
 
     /**
@@ -194,10 +199,9 @@ public class YModem implements FileStreamThread.DataRaderListener {
      * =》直接发送FileName
      *
      * ==============================================================================
-     *
      */
     private void sendData(String data) {
-        streamThread = new FileStreamThread(mContext, filePath, this);
+        streamThread = new FileStreamThread(mContext, filePath, this, interval);
         if(data != null) {
             CURR_STEP = STEP_INIT;
             Lg.f("StartData!!!");
@@ -274,7 +278,13 @@ public class YModem implements FileStreamThread.DataRaderListener {
      * 重新倒计时
      */
     private void reClock() {
-        timerHelper.startTimer(timeoutListener, PACKAGE_TIME_OUT);
+        if (packageTimeOut > 0) {
+            Lg.f("start the countdown( " + packageTimeOut + " ).");
+            timerHelper.startTimer(timeoutListener, packageTimeOut);
+        } else {
+            // 开始倒计时
+            Lg.f("no countdown( " + packageTimeOut + " ).");
+        }
     }
 
     /**
@@ -401,7 +411,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
     private void handlePackageFail(String reason) {
         packageErrorTimes++;
         Lg.f("Fail:" + reason + " for " + packageErrorTimes + " times");
-        if (packageErrorTimes < MAX_PACKAGE_SEND_ERROR_TIMES) {
+        if (packageErrorTimes < maxRetries) {
             sendPackageData(currSending);
         } else {
             //Still, we stop the transmission, release the resources
@@ -438,8 +448,20 @@ public class YModem implements FileStreamThread.DataRaderListener {
         private Integer size;
         private YModemListener listener;
 
-        public Builder with(Context context) {
+        // 重试次数据
+        private int maxRetries;
+
+        // 发送FileBody 时每帧数据发送线程睡眠时长; (10ms->10s)
+        private int interval;
+
+        // 每包数据超时时长 packageTimeOut
+        private int packageTimeOut;
+
+        public Builder with(Context context, int maxRetries, int interval, int packageTimeOut) {
             this.context = context;
+            this.maxRetries = maxRetries;
+            this.interval = interval;
+            this.packageTimeOut = packageTimeOut;
             return this;
         }
 
@@ -469,7 +491,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
         }
 
         public YModem build() {
-            return new YModem(context, filePath, fileNameString, fileMd5String, size, listener);
+            return new YModem(context, filePath, fileNameString, fileMd5String, size, maxRetries, interval, packageTimeOut, listener);
         }
 
     }

@@ -20,11 +20,13 @@ public class FileStreamThread extends Thread {
     private final AtomicBoolean isDataAcknowledged = new AtomicBoolean(false);
     private boolean isKeepRunning = false;
     private int fileByteSize = 0;
+    private final long interval;
 
-    FileStreamThread(Context mContext, String filePath, DataRaderListener listener) {
+    FileStreamThread(Context mContext, String filePath, DataRaderListener listener,long interval) {
         this.mContext = mContext;
         this.filePath = filePath;
         this.listener = listener;
+        this.interval = interval;
     }
 
     int getFileByteSize(){
@@ -59,7 +61,8 @@ public class FileStreamThread extends Thread {
                     //In my circumstances, this can be up to 3 seconds.
                     ////我们需要睡眠一段时间，因为从BLE发送1024字节数据需要几秒钟。
                     //在我的情况下，这可以长达3秒。
-                    Thread.sleep(100);
+                    //noinspection BusyWait
+                    Thread.sleep(interval);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
