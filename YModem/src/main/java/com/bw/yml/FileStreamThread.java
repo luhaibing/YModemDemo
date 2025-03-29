@@ -78,7 +78,7 @@ public class FileStreamThread extends Thread {
             byte[] pack = YModemUtil.getDataPackage(block, dataLength, blockSequence);
 
             if (listener != null) {
-                listener.onDataReady(pack);
+                listener.onDataReady(dataLength,pack);
             }
 
             blockSequence++;
@@ -129,7 +129,7 @@ public class FileStreamThread extends Thread {
     }
 
     public interface DataRaderListener {
-        void onDataReady(byte[] data);
+        void onDataReady(int length, byte[] data);
         void onFinish();
     }
 

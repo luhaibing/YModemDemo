@@ -104,6 +104,15 @@ public class YModem implements FileStreamThread.DataRaderListener {
      * Start the transmission
      */
     public void start(String data) {
+        bytesSent = 0;
+        currSending = null;
+        CURR_STEP = STEP_INIT;
+        packageErrorTimes = 0;
+        if (streamThread != null) {
+            streamThread.release();
+            streamThread = null;
+        }
+        timerHelper.stopTimer();
         sendData(data);
     }
 
@@ -203,8 +212,12 @@ public class YModem implements FileStreamThread.DataRaderListener {
     }
 
     //Callback from the data reading thread when a data package is ready
+
+    private int currentDataLength;
+
     @Override
-    public void onDataReady(byte[] data) {
+    public void onDataReady(int length, byte[] data) {
+        currentDataLength = length;
         sendPackageData(data);
     }
 
@@ -290,7 +303,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
         if (value.length == 1 && value[0] == ACK) {//Receive ACK for file data
             Lg.f("Received 'ACK'");
             packageErrorTimes = 0;
-            bytesSent += currSending.length;
+            bytesSent += currentDataLength;
             try {
                 if (listener != null) {
                     listener.onProgress(bytesSent, streamThread.getFileByteSize());
