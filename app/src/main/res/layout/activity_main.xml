@@ -26,12 +26,23 @@
         android:layout_height="wrap_content"
         android:text="Stop" />
 
+    <Button
+        android:id="@+id/btNak"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="NAK" />
+
+    <Button
+        android:id="@+id/btAck"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ACK" />
 
     <androidx.constraintlayout.helper.widget.Flow
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        app:constraint_referenced_ids="tvProgress,btUpgrade,btStop"
+        app:constraint_referenced_ids="tvProgress,btUpgrade,btStop,btNak,btAck"
         app:flow_verticalGap="10dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"

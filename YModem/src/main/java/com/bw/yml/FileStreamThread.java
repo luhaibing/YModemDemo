@@ -15,14 +15,14 @@ public class FileStreamThread extends Thread {
 
     private final Context mContext;
     private InputStream inputStream = null;
-    private DataRaderListener listener;
+    private DataReaderListener listener;
     private final String filePath;
     private final AtomicBoolean isDataAcknowledged = new AtomicBoolean(false);
     private boolean isKeepRunning = false;
     private int fileByteSize = 0;
     private final long interval;
 
-    FileStreamThread(Context mContext, String filePath, DataRaderListener listener,long interval) {
+    FileStreamThread(Context mContext, String filePath, DataReaderListener listener, long interval) {
         this.mContext = mContext;
         this.filePath = filePath;
         this.listener = listener;
@@ -85,6 +85,7 @@ public class FileStreamThread extends Thread {
             }
 
             blockSequence++;
+            times++;
             isDataAcknowledged.set(false);
         }
 
@@ -131,9 +132,16 @@ public class FileStreamThread extends Thread {
         }
     }
 
-    public interface DataRaderListener {
+    public interface DataReaderListener {
         void onDataReady(int length, byte[] data);
         void onFinish();
+    }
+
+    private int times = 0;
+
+    int bytesSent() {
+        int size = times * YModem.mSize;
+        return Math.min(size, fileByteSize);
     }
 
 }

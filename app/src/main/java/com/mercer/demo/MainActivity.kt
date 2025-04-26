@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.math.RoundingMode
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
 class MainActivity : AppCompatActivity() {
@@ -63,11 +64,17 @@ class MainActivity : AppCompatActivity() {
             btStop.setOnClickListener {
                 yModem?.stop()
             }
+            btNak.setOnClickListener {
+                intercep.set(true)
+            }
+            btAck.setOnClickListener {
+                intercep.set(false)
+            }
         }
     }
 
     private val file by lazy {
-        File(externalCacheDir, "fox.jpg")
+        File(externalCacheDir, "Surfer_S2-V1.0.3.3-full-MCU.bin")
     }
 
     var yModem: YModem? = null
@@ -130,8 +137,10 @@ class MainActivity : AppCompatActivity() {
             1029 -> {
                 lifecycleScope.launch {
                     retries++
-                    delay(50.milliseconds)
-                    if (retries < 10) {
+                    delay(500.milliseconds)
+                    val toInt = value[1].toInt()
+                    Log.e("TAG", "Frame : $toInt")
+                    if (intercep.get()) {
                         // 模拟拒绝
                         yModem?.onReceiveData(byteArrayOf(0x15))
                     } else {
@@ -147,6 +156,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private val intercep = AtomicBoolean()
 
     private fun render(value: String) {
         runOnUiThread {

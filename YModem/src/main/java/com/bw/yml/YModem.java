@@ -3,6 +3,7 @@ package com.bw.yml;
 import android.content.Context;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ========================================================================================
@@ -41,7 +42,7 @@ import java.io.IOException;
  *
  */
 
-public class YModem implements FileStreamThread.DataRaderListener {
+public class YModem implements FileStreamThread.DataReaderListener {
 
     private static final int STEP_INIT = 0x00;
     private static final int STEP_FILE_NAME = 0x01;
@@ -69,10 +70,13 @@ public class YModem implements FileStreamThread.DataRaderListener {
     private final TimeOutHelper timerHelper = new TimeOutHelper();
     private FileStreamThread streamThread;
 
-    //bytes has been sent of this transmission
-    private int bytesSent = 0;
+    // 前一帧数据
+    private byte[] prevSending = null;
     //package data of current sending, used for int case of fail
+    // 当前帧数据
     private byte[] currSending = null;
+    // 重发上一帧数据的错误次数
+    private final int resendPreviousErrorTimes;
     private int packageErrorTimes = 0;
     protected static Integer mSize = 1024;
     private final int maxRetries;
@@ -90,7 +94,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
      */
     private YModem(Context context, String filePath,
                    String fileNameString, String fileMd5String, Integer size,
-                   int maxRetries, int interval, int packageTimeOut,
+                   int maxRetries, int interval, int packageTimeOut, int resendPreviousErrorTimes,
                    YModemListener listener) {
         this.filePath = filePath;
         this.fileNameString = fileNameString;
@@ -104,13 +108,14 @@ public class YModem implements FileStreamThread.DataRaderListener {
         this.interval = Math.max(Math.min(interval, 1000 * 10), 25);
         this.maxRetries = Math.max(maxRetries, 6);
         this.packageTimeOut = Math.max(packageTimeOut, 0);
+        this.resendPreviousErrorTimes = Math.max(resendPreviousErrorTimes, 10);
     }
 
     /**
      * Start the transmission
      */
     public void start(String data) {
-        bytesSent = 0;
+        prevSending = null;
         currSending = null;
         CURR_STEP = STEP_INIT;
         packageErrorTimes = 0;
@@ -128,7 +133,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
      * 内部停止
      */
     private void internalShutdown() {
-        bytesSent = 0;
+        prevSending = null;
         currSending = null;
         packageErrorTimes = 0;
         if (streamThread != null) {
@@ -206,6 +211,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
             CURR_STEP = STEP_INIT;
             Lg.f("StartData!!!");
             byte[] hello = YModemUtil.getYModelData(data);
+            currSending = hello;
             sendPackageData(hello);
         }else{
             packageErrorTimes = 0;
@@ -218,8 +224,8 @@ public class YModem implements FileStreamThread.DataRaderListener {
         Lg.f("sendFileName");
         try {
             int fileByteSize = streamThread.getFileByteSize();
-            byte[] fileNamePackage = YModemUtil.getFileNamePackage(fileNameString, fileByteSize
-                    , fileMd5String);
+            byte[] fileNamePackage = YModemUtil.getFileNamePackage(fileNameString, fileByteSize, fileMd5String);
+            currSending = fileNamePackage;
             sendPackageData(fileNamePackage);
         } catch (IOException e) {
             e.printStackTrace();
@@ -234,11 +240,10 @@ public class YModem implements FileStreamThread.DataRaderListener {
 
     //Callback from the data reading thread when a data package is ready
 
-    private int currentDataLength;
-
     @Override
     public void onDataReady(int length, byte[] data) {
-        currentDataLength = length;
+        prevSending = currSending;
+        currSending = data;
         sendPackageData(data);
     }
 
@@ -246,7 +251,10 @@ public class YModem implements FileStreamThread.DataRaderListener {
         CURR_STEP = STEP_EOT;
         Lg.f("sendEOT");
         if (listener != null) {
-            listener.onDataReady(YModemUtil.getEOT());
+            prevSending = null;
+            byte[] eot = YModemUtil.getEOT();
+            currSending = eot;
+            listener.onDataReady(eot);
         }
     }
 
@@ -255,7 +263,9 @@ public class YModem implements FileStreamThread.DataRaderListener {
         Lg.f("sendEND");
         if (listener != null) {
             try {
-                listener.onDataReady(YModemUtil.getEnd());
+                byte[] end = YModemUtil.getEnd();
+                currSending = end;
+                listener.onDataReady(end);
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -264,7 +274,6 @@ public class YModem implements FileStreamThread.DataRaderListener {
 
     private void sendPackageData(byte[] packageData) {
         if (listener != null && packageData != null) {
-            currSending = packageData;
             //Start the timer, it will be cancelled when reponse received,
             // or trigger the timeout and resend the current package data
             //启动计时器，当收到回复时将被取消，
@@ -327,13 +336,16 @@ public class YModem implements FileStreamThread.DataRaderListener {
     }
 
     private void handleFileBody(byte[] value) {
-        if (value.length == 1 && value[0] == ACK) {//Receive ACK for file data
+        if (value.length == 1 && value[0] == ACK && previousFrame.get()) {//Receive ACK for file data
+            packageErrorTimes = 0;
+            previousFrame.set(false);
+            sendPackageData(currSending);
+        } else if (value.length == 1 && value[0] == ACK) {//Receive ACK for file data
             Lg.f("Received 'ACK'");
             packageErrorTimes = 0;
-            bytesSent += currentDataLength;
             try {
                 if (listener != null) {
-                    listener.onProgress(bytesSent, streamThread.getFileByteSize());
+                    listener.onProgress(streamThread.bytesSent(), streamThread.getFileByteSize());
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -405,13 +417,18 @@ public class YModem implements FileStreamThread.DataRaderListener {
         }
     }
 
+    private final AtomicBoolean previousFrame = new AtomicBoolean(false);
+
     //Handle a failed package data ,resend it up to MAX_PACKAGE_SEND_ERROR_TIMES times.
     //处理失败的包数据
     //If still failed, then the transmission failed.
     private void handlePackageFail(String reason) {
         packageErrorTimes++;
         Lg.f("Fail:" + reason + " for " + packageErrorTimes + " times");
-        if (packageErrorTimes < maxRetries) {
+        if (getCurrStep() == STEP_FILE_BODY && packageErrorTimes > resendPreviousErrorTimes && prevSending != null) {
+            previousFrame.set(true);
+            sendPackageData(prevSending);
+        } else if (packageErrorTimes < maxRetries) {
             sendPackageData(currSending);
         } else {
             //Still, we stop the transmission, release the resources
@@ -457,6 +474,9 @@ public class YModem implements FileStreamThread.DataRaderListener {
         // 每包数据超时时长 packageTimeOut
         private int packageTimeOut;
 
+        // 失败次数 > 该次数时,重发上一帧的数据[FileBody];
+        private int resendPreviousErrorTimes;
+
         public Builder with(Context context, int maxRetries, int interval, int packageTimeOut) {
             this.context = context;
             this.maxRetries = maxRetries;
@@ -475,7 +495,7 @@ public class YModem implements FileStreamThread.DataRaderListener {
             return this;
         }
 
-        public Builder sendSize(Integer size){
+        public Builder sendSize(Integer size) {
             this.size = size;
             return this;
         }
@@ -490,8 +510,12 @@ public class YModem implements FileStreamThread.DataRaderListener {
             return this;
         }
 
+        public void setResendPreviousErrorTimes(int resendPreviousErrorTimes) {
+            this.resendPreviousErrorTimes = resendPreviousErrorTimes;
+        }
+
         public YModem build() {
-            return new YModem(context, filePath, fileNameString, fileMd5String, size, maxRetries, interval, packageTimeOut, listener);
+            return new YModem(context, filePath, fileNameString, fileMd5String, size, maxRetries, interval, packageTimeOut,resendPreviousErrorTimes, listener);
         }
 
     }
